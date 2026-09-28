@@ -1,8 +1,11 @@
 // Esquema de datos de SOJA.
 //
-// Dev: SQLite (cero configuración). Producción: cambiar `provider` a
-// "postgresql" y el adapter en src/server/db.ts. No hay nada específico de
-// SQLite en el esquema salvo el uso de String para los campos JSON.
+// Postgres en los dos lados: local y producción apuntan al mismo motor para
+// que las migraciones sean unas solas. En desarrollo alcanza una base gratis
+// de Neon (o una branch aparte de la misma base).
+//
+// Los campos que guardan JSON son String a propósito: el documento del diseño
+// y las cotizaciones congeladas se validan con Zod en el borde, no en la base.
 
 generator client {
   provider = "prisma-client"
@@ -10,7 +13,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 /// Un diseño guardado desde el diseñador. Es inmutable: cada "agregar al

@@ -13,10 +13,16 @@ pedido, y el taller recibe los archivos de arte en alta resolución.
 
 ```bash
 npm install          # instala y corre `prisma generate`
-cp .env.example .env # revisá las variables
-npm run db:migrate   # crea prisma/dev.db
+cp .env.example .env # cargá DATABASE_URL (ver abajo)
+npm run db:deploy    # aplica las migraciones
 npm run dev          # http://localhost:3000
 ```
+
+Hace falta un Postgres, también en desarrollo: es el mismo motor que en
+producción para tener una sola línea de migraciones. Lo más rápido es una base
+gratis en [Neon](https://neon.tech) y pegar su cadena de conexión en
+`DATABASE_URL`. Si querés separar desarrollo de producción, creá una *branch*
+en Neon y usá esa cadena en tu `.env`.
 
 Sin credenciales de Mercado Pago la app corre en **modo simulado**: el pedido
 se crea y se marca como pago para poder recorrer todo el circuito. En cuanto
@@ -35,7 +41,8 @@ contraseña de `ADMIN_PASSWORD`. Para mirar la base cruda: `npm run db:studio`.
 | Estilos | Tailwind CSS v4, tokens de marca en `@theme` | `src/app/globals.css` |
 | Canvas | Fabric.js 6 | `src/components/designer` |
 | Estado cliente | Zustand con persistencia en localStorage | `src/lib/*-store.ts` |
-| Base de datos | Prisma 7 · SQLite en dev, Postgres en prod | `prisma/schema.prisma` |
+| Base de datos | Prisma 7 · Postgres (adapter `@prisma/adapter-pg`) | `prisma/schema.prisma` |
+| Archivos | Disco local o bucket S3-compatible (R2, S3, B2) | `src/server/storage.ts` |
 | Pagos | Mercado Pago Checkout Pro + webhook | `src/server/mercadopago.ts` |
 | Validación | Zod en todo lo que entra por la red | `src/lib/design.ts`, `src/server/*` |
 
@@ -197,31 +204,91 @@ simula, pero no la escribe.
 
 ---
 
+## Deploy en Render
+
+Hay un `render.yaml` listo: en Render, **New → Blueprint**, elegís este repo y
+te crea el servicio con los comandos ya puestos. Si preferís hacerlo a mano:
+
+| Campo | Valor |
+| --- | --- |
+| Runtime | Node (`NODE_VERSION=22`) |
+| Build Command | `npm ci && npx prisma migrate deploy && npm run build` |
+| Start Command | `npm run start` |
+| Health Check Path | `/` |
+
+Las migraciones van en el build porque el plan gratuito no tiene
+*Pre-Deploy Command*. En un plan pago, movelas ahí.
+
+### Los dos servicios de afuera
+
+El filesystem de Render es efímero: se borra en cada deploy **y cada vez que el
+plan gratuito despierta el servicio**. Por eso nada persistente vive en el
+contenedor.
+
+1. **Postgres en [Neon](https://neon.tech)** (gratis, sin vencimiento). Copiá la
+   cadena *pooled* a `DATABASE_URL`.
+2. **Bucket en [Cloudflare R2](https://developers.cloudflare.com/r2/)** (gratis
+   hasta 10 GB, sin cargo por egreso). Creá el bucket, habilitale el acceso
+   público (dominio `r2.dev` o uno propio) y un token de API con permiso de
+   escritura. Después:
+
+   ```
+   STORAGE_DRIVER=s3
+   S3_BUCKET=soja
+   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   S3_ACCESS_KEY_ID=...
+   S3_SECRET_ACCESS_KEY=...
+   S3_PUBLIC_URL=https://pub-xxxxx.r2.dev
+   S3_REGION=auto
+   ```
+
+No hace falta configurarle CORS al bucket: el `rewrite` de `/uploads/:path*`
+declarado en `next.config.ts` lo proxea desde nuestro dominio. **Eso es a
+propósito**, no por comodidad: el diseñador carga las imágenes con
+`crossOrigin: "anonymous"` y después exporta el mockup con `toDataURL()`. Si
+las imágenes vinieran de otro host, el canvas quedaría *tainted* y la
+exportación del mockup rompería. Además, el modelo del diseño sólo acepta
+imágenes de nuestro origen, así que en la base nunca se guarda un host externo.
+
+Ese rewrite corre **después** de revisar el filesystem, así que en desarrollo,
+con `STORAGE_DRIVER=local`, los archivos de `public/uploads` siguen ganando.
+
+### El orden importa
+
+`NEXT_PUBLIC_SITE_URL` y `NEXT_PUBLIC_MP_PUBLIC_KEY` se hornean en el build, no
+se leen en runtime, y el dominio no lo sabés hasta el primer deploy. La
+secuencia es:
+
+1. Deployá con las variables que ya tengas.
+2. Copiá la URL que te dio Render a `NEXT_PUBLIC_SITE_URL` (sin barra final).
+3. **Redeployá** — reiniciar no alcanza.
+4. Recién ahí configurá el webhook de Mercado Pago apuntando a
+   `https://tu-servicio.onrender.com/api/webhooks/mercadopago`.
+
+### Para una demo, dejá Mercado Pago sin configurar
+
+Sin `MP_ACCESS_TOKEN` la app corre en **modo simulado**: crea el pedido y lo
+marca como pagado sin cobrar nada. Se puede recorrer todo el circuito —
+diseñar, carrito, checkout, ficha del pedido, panel — sin cuenta de Mercado
+Pago y sin riesgo de cobrarle a nadie. En cuanto cargás el token, el modo
+simulado se apaga solo.
+
+---
+
 ## Pasar a producción
 
 Lo que hay que cambiar antes de publicar, en orden de importancia:
 
-1. **Base de datos → Postgres.** SQLite no sirve en Vercel ni con más de un
-   proceso.
-   - `prisma/schema.prisma`: `provider = "postgresql"`.
-   - `src/server/db.ts`: reemplazar `PrismaBetterSqlite3` por `PrismaPg`
-     (`npm i @prisma/adapter-pg`).
-   - `DATABASE_URL` con la cadena de Neon / Supabase / Railway.
-   - `npm run db:deploy` en el pipeline.
-2. **Almacenamiento → object storage.** `public/uploads` se borra en cada
-   deploy en plataformas serverless. El adapter ya está preparado:
-   implementá el driver `s3` en `src/server/storage.ts` (S3, Cloudflare R2,
-   Vercel Blob o Cloudinary sirven igual) y poné `STORAGE_DRIVER=s3`.
-3. **Mails.** Hoy no se manda ninguno. Faltan: confirmación de pedido al
+1. **Mails.** Hoy no se manda ninguno. Faltan: confirmación de pedido al
    cliente, aviso al taller y el mockup para aprobar. Enganchar Resend o
    similar en `src/app/api/checkout/route.ts` y en el webhook.
-4. **Contraseña del panel como hash.** En producción cargá
+2. **Contraseña del panel como hash.** En producción cargá
    `ADMIN_PASSWORD_HASH` (ver `npm run admin:hash`) y sacá `ADMIN_PASSWORD`.
    El límite de intentos de login es en memoria: detrás de más de una
    instancia hay que moverlo a Redis.
-5. **Rate limiting en `/api/upload`.** Está validado por tipo y tamaño (PNG,
+3. **Rate limiting en `/api/upload`.** Está validado por tipo y tamaño (PNG,
    JPG, WEBP, hasta 15 MB) pero cualquiera puede subir sin límite de veces.
-6. **SVG del cliente.** Hoy se rechazan a propósito: un SVG servido desde el
+4. **SVG del cliente.** Hoy se rechazan a propósito: un SVG servido desde el
    mismo dominio puede ejecutar scripts. Si querés aceptarlos, sanitizalos o
    servilos desde otro dominio.
 
@@ -230,6 +297,8 @@ Lo que hay que cambiar antes de publicar, en orden de importancia:
 ## Mapa del código
 
 ```
+render.yaml                      Blueprint de deploy en Render
+.nvmrc                           Versión de Node
 src/
   proxy.ts                       Corta el paso a /admin (antes: middleware.ts)
   app/

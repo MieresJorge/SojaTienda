@@ -381,10 +381,12 @@ function whereFrom(filters: OrderFilters) {
 
   const term = filters.q?.trim();
   if (term) {
+    // `mode: "insensitive"` es de Postgres: sin esto buscar "jorge" no
+    // encontraría a "Jorge", porque el LIKE de Postgres distingue mayúsculas.
     where.OR = [
-      { code: { contains: term.toUpperCase() } },
-      { customerName: { contains: term } },
-      { customerEmail: { contains: term } },
+      { code: { contains: term, mode: "insensitive" } },
+      { customerName: { contains: term, mode: "insensitive" } },
+      { customerEmail: { contains: term, mode: "insensitive" } },
       { customerPhone: { contains: term } },
     ];
   }

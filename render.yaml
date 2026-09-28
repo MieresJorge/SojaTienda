@@ -1,0 +1,71 @@
+# Blueprint de Render.
+#
+# Para usarlo: en Render, New → Blueprint → elegí este repo. Crea el servicio
+# con estos comandos ya puestos; las variables marcadas `sync: false` te las
+# pide al momento de crearlo y no quedan en el repo.
+#
+# La base es Postgres afuera de Render (Neon) y las imágenes van a un bucket
+# S3-compatible (Cloudflare R2), así nada se pierde cuando el plan gratuito
+# duerme el servicio y lo reinicia desde la imagen del build.
+services:
+  - type: web
+    name: soja-tienda
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+
+    # Las migraciones van en el build porque el plan gratuito no tiene
+    # preDeployCommand. Si pasás a un plan pago, movelas ahí.
+    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    startCommand: npm run start
+
+    healthCheckPath: /
+
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+
+      # Cadena de conexión de Postgres (Neon). Usá la variante *pooled*.
+      - key: DATABASE_URL
+        sync: false
+
+      # OJO: las NEXT_PUBLIC_* se hornean en el build, no se leen en runtime.
+      # El dominio no lo sabés hasta después del primer deploy: deployá,
+      # copiá la URL que te da Render, cargala acá y redeployá.
+      - key: NEXT_PUBLIC_SITE_URL
+        sync: false
+
+      # Panel de administración. Generá el hash con:
+      #   npm run admin:hash -- "tu contraseña"
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
+
+      # Arte y mockups en un bucket S3-compatible.
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      # Base pública del bucket: next.config.ts manda /uploads/* acá.
+      - key: S3_PUBLIC_URL
+        sync: false
+      - key: S3_REGION
+        value: auto
+
+      # Mercado Pago. Si las dejás vacías la app corre en modo simulado: crea
+      # el pedido y lo marca pagado sin cobrar, que es lo que querés para una
+      # demo. Para cobrar de verdad, cargá las tres.
+      - key: MP_ACCESS_TOKEN
+        sync: false
+      - key: NEXT_PUBLIC_MP_PUBLIC_KEY
+        sync: false
+      - key: MP_WEBHOOK_SECRET
+        sync: false

@@ -4,14 +4,24 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+
 /**
  * Adapter de almacenamiento para el arte que sube el cliente y los mockups
  * que renderiza el diseñador.
  *
- * `local` escribe en public/uploads y sirve los archivos como estáticos. Sirve
- * para desarrollo y para un VPS con disco persistente. En Vercel el
- * filesystem es efímero: ahí hay que implementar el driver `s3` (o Cloudinary
- * / UploadThing / Vercel Blob) respetando la misma interfaz `StorageDriver`.
+ * `local` escribe en public/uploads y sirve los archivos como estáticos.
+ * Sirve para desarrollo y para un VPS con disco persistente.
+ *
+ * `s3` sube a cualquier storage compatible con S3 (Cloudflare R2, AWS S3,
+ * Backblaze B2, MinIO). Es el que hay que usar en Render, Vercel y cualquier
+ * plataforma donde el filesystem sea efímero.
+ *
+ * Los dos drivers devuelven la URL con la MISMA forma, `/uploads/<key>`, y eso
+ * no es casualidad: el modelo del diseño (src/lib/design.ts) sólo acepta
+ * imágenes de nuestro propio origen, así que el documento guardado nunca
+ * contiene un host externo. En producción, un rewrite de `/uploads/:path*`
+ * declarado en next.config.ts manda esas rutas al bucket público.
  */
 
 export interface StoredFile {
@@ -53,11 +63,94 @@ const localDriver: StorageDriver = {
   },
 };
 
-const s3Driver: StorageDriver = {
-  async put() {
-    throw new Error(
-      "STORAGE_DRIVER=s3 todavía no está implementado. Completá este adapter con @aws-sdk/client-s3 (o Vercel Blob) antes de desplegar.",
+/**
+ * Config del bucket. Se lee en cada llamada y no al importar el módulo, así
+ * `next build` no falla en una plataforma que todavía no tiene las variables.
+ */
+function s3Config() {
+  const bucket = process.env.S3_BUCKET;
+  const endpoint = process.env.S3_ENDPOINT;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
+
+  const missing = [
+    !bucket && "S3_BUCKET",
+    !endpoint && "S3_ENDPOINT",
+    !accessKeyId && "S3_ACCESS_KEY_ID",
+    !secretAccessKey && "S3_SECRET_ACCESS_KEY",
+  ].filter(Boolean);
+
+  if (missing.length > 0) {
+    throw new StorageError(
+      `STORAGE_DRIVER=s3 pero faltan variables de entorno: ${missing.join(", ")}.`,
     );
+  }
+
+  return {
+    bucket: bucket as string,
+    endpoint: endpoint as string,
+    accessKeyId: accessKeyId as string,
+    secretAccessKey: secretAccessKey as string,
+    // R2 ignora la región pero el SDK exige una.
+    region: process.env.S3_REGION || "auto",
+  };
+}
+
+let cachedClient: S3Client | null = null;
+
+function s3Client(): S3Client {
+  if (cachedClient) return cachedClient;
+  const config = s3Config();
+
+  cachedClient = new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+    // R2 y MinIO esperan el bucket en el path, no como subdominio.
+    forcePathStyle: true,
+    // El SDK manda un checksum CRC32 por defecto que varios backends
+    // compatibles rechazan. Sólo lo mandamos cuando la operación lo exige.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+  });
+
+  return cachedClient;
+}
+
+const s3Driver: StorageDriver = {
+  async put(data, { folder, extension, contentType }) {
+    const config = s3Config();
+    const now = new Date();
+    const bucket = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const key = `${folder}/${bucket}/${randomUUID()}.${extension}`;
+
+    try {
+      await s3Client().send(
+        new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: key,
+          Body: data,
+          ContentType: contentType,
+          // Los nombres llevan un uuid, así que el contenido es inmutable.
+          CacheControl: "public, max-age=31536000, immutable",
+        }),
+      );
+    } catch (error) {
+      console.error("[storage] falló la subida a S3", error);
+      throw new StorageError(
+        "No pudimos guardar el archivo en el storage. Probá de nuevo en un momento.",
+      );
+    }
+
+    return {
+      key,
+      // Misma forma que el driver local: el rewrite de /uploads lo resuelve.
+      url: `/uploads/${key}`,
+      bytes: data.byteLength,
+      contentType,
+    };
   },
 };
 
