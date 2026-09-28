@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { quantitiesSchema, quoteStoredDesign, QuoteError } from "@/server/quote";
+import { getSettings, shippingCostWith } from "@/server/settings";
 
 export const runtime = "nodejs";
 
@@ -45,18 +46,19 @@ export async function POST(request: Request) {
 
     const itemsSubtotal = lines.reduce((acc, line) => acc + line.itemsSubtotal, 0);
     const setupTotal = lines.reduce((acc, line) => acc + line.setupTotal, 0);
-    const flat = Number(process.env.SOJA_SHIPPING_FLAT ?? 6500);
-    const freeFrom = Number(process.env.SOJA_FREE_SHIPPING_FROM ?? 250000);
     const merchandise = itemsSubtotal + setupTotal;
-    const shippingCost =
-      body.shippingMethod === "envio" && merchandise < freeFrom ? flat : 0;
+
+    // Mismos ajustes que usa createOrder: si el envío se cambia desde el panel,
+    // lo que se muestra acá y lo que se cobra no pueden divergir.
+    const settings = await getSettings();
+    const shippingCost = shippingCostWith(settings, body.shippingMethod, merchandise);
 
     return NextResponse.json({
       lines,
       itemsSubtotal,
       setupTotal,
       shippingCost,
-      freeShippingFrom: freeFrom,
+      freeShippingFrom: settings.freeShippingFrom,
       total: merchandise + shippingCost,
     });
   } catch (error) {
