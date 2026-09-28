@@ -1,0 +1,140 @@
+// Esquema de datos de SOJA.
+//
+// Dev: SQLite (cero configuración). Producción: cambiar `provider` a
+// "postgresql" y el adapter en src/server/db.ts. No hay nada específico de
+// SQLite en el esquema salvo el uso de String para los campos JSON.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Un diseño guardado desde el diseñador. Es inmutable: cada "agregar al
+/// carrito" crea uno nuevo, así el pedido siempre apunta al arte exacto.
+model Design {
+  id        String   @id
+  productId String
+  colorId   String
+  method    String
+
+  /// Documento del diseño (objetos por ubicación) serializado en JSON.
+  doc String
+
+  /// Resumen por ubicación (colores detectados, cm² de arte) en JSON.
+  meta String
+
+  /// Mockups renderizados, para el carrito, el checkout y el taller.
+  previewFrontUrl String?
+  previewBackUrl  String?
+
+  createdAt  DateTime    @default(now())
+  orderItems OrderItem[]
+}
+
+model Order {
+  id   String @id
+  /// Código corto que ve el cliente (SOJA-XXXXXX).
+  code String @unique
+
+  /// draft | pending | paid | failed | cancelled | in_production | shipped | delivered
+  status String @default("draft")
+
+  customerName  String
+  customerEmail String
+  customerPhone String
+  customerDoc   String?
+
+  /// pickup | envio
+  shippingMethod String  @default("pickup")
+  shippingCost   Int     @default(0)
+  addressStreet  String?
+  addressCity    String?
+  addressState   String?
+  addressZip     String?
+  notes          String?
+
+  itemsSubtotal Int
+  setupTotal    Int
+  total         Int
+  currency      String @default("ARS")
+
+  /// Notas internas del taller. Nunca se muestran al cliente.
+  adminNotes String?
+  /// Código de seguimiento del correo, visible para el cliente.
+  trackingCode String?
+  /// Fecha comprometida de entrega, para la cola de producción.
+  dueDate DateTime?
+  /// Cuándo se acreditó el pago. Es lo que se factura, no `createdAt`.
+  paidAt DateTime?
+
+  mpPreferenceId String?
+  mpPaymentId    String?
+  mpStatus       String?
+  /// Último payload crudo recibido de Mercado Pago, para auditoría.
+  mpRaw          String?
+
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  items     OrderItem[]
+  events    OrderEvent[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([customerEmail])
+}
+
+/// Bitácora de un pedido: cada cambio de estado, nota o aviso queda acá.
+/// Es sólo append: nada en el panel edita ni borra eventos.
+model OrderEvent {
+  id      String @id
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// status | note | payment | shipping | system
+  kind    String
+  message String
+  /// Quién lo hizo: "admin", "cliente", "mercadopago", "sistema".
+  actor   String @default("admin")
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+/// Ajustes operativos que el dueño edita desde /admin/config.
+/// Clave/valor en texto: el tipado y los valores por defecto viven en
+/// src/server/settings.ts, que es quien lee esta tabla.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model OrderItem {
+  id      String @id
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  designId String
+  design   Design @relation(fields: [designId], references: [id])
+
+  productId   String
+  productName String
+  colorId     String
+  method      String
+  rush        Boolean @default(false)
+
+  /// Cantidades por talle, en JSON: {"M":10,"L":5}
+  quantities String
+  /// Cotización congelada al momento de la compra, calculada en el servidor.
+  quote      String
+
+  quantity Int
+  subtotal Int
+
+  @@index([orderId])
+}
