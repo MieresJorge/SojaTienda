@@ -1,0 +1,36 @@
+# Servicio de systemd para SOJA.
+#
+# Se instala en /etc/systemd/system/soja.service (lo hace setup-vps.sh).
+#   systemctl status soja      estado
+#   systemctl restart soja     reiniciar
+#   journalctl -u soja -f      logs en vivo
+[Unit]
+Description=SOJA - tienda y diseñador de remeras
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=soja
+WorkingDirectory=/home/soja/soja-web
+
+# Next levanta el .env del WorkingDirectory por su cuenta, así que acá sólo
+# va lo que no es secreto.
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+# Escucha sólo en loopback: a internet se sale por nginx.
+ExecStart=/home/soja/soja-web/node_modules/.bin/next start -H 127.0.0.1 -p 3000
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# La app sólo necesita escribir en public/uploads.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -204,6 +204,116 @@ simula, pero no la escribe.
 
 ---
 
+## Deploy en un VPS (Hostinger)
+
+A diferencia de Render, un VPS tiene **disco persistente**: no hace falta
+bucket S3 ni Postgres externo. Todo vive en la misma máquina con
+`STORAGE_DRIVER=local`.
+
+En `deploy/` está todo lo necesario:
+
+| Archivo | Qué es |
+| --- | --- |
+| `setup-vps.sh` | Prepara el servidor. Se corre una sola vez, como root |
+| `nginx-soja.conf` | Reverse proxy del puerto 80 al 3000 |
+| `soja.service` | Unit de systemd: arranca sola y se reinicia si se cae |
+| `update.sh` | Publica una versión nueva. Se corre en cada deploy |
+
+### 1. Preparar el servidor
+
+En el panel de Hostinger, instalá **Ubuntu 24.04** limpio y anotá el IP y la
+contraseña de root. Después, desde tu máquina:
+
+```bash
+ssh root@TU_IP
+```
+
+Traé el repo y corré el script de preparación:
+
+```bash
+apt-get update && apt-get install -y git
+git clone https://github.com/MieresJorge/SojaTienda.git /tmp/soja
+bash /tmp/soja/deploy/setup-vps.sh
+```
+
+Instala Node 22, Postgres, nginx y el firewall, crea el usuario `soja` y la
+base de datos, y te imprime el IP público y la cadena de conexión. Si el repo
+es privado, cloná con un
+[token de acceso personal](https://github.com/settings/tokens):
+`https://TOKEN@github.com/MieresJorge/SojaTienda.git`.
+
+### 2. Subir la app y configurarla
+
+```bash
+sudo -iu soja
+git clone https://github.com/MieresJorge/SojaTienda.git ~/soja-web
+cd ~/soja-web
+cp .env.example .env
+```
+
+El `.env` mínimo para mostrarle la tienda a un cliente:
+
+```bash
+DATABASE_URL="postgresql://soja:...@localhost:5432/soja"   # está en ~/DATABASE_URL.txt
+NEXT_PUBLIC_SITE_URL="http://TU_IP"                        # sin barra final
+STORAGE_DRIVER="local"
+ADMIN_PASSWORD_HASH="..."                                  # ver abajo
+ADMIN_PASSWORD=""                                          # vacío en producción
+```
+
+El hash del panel se genera en el mismo servidor y se pega en el `.env`:
+
+```bash
+npm install                           # hace falta antes de poder generarlo
+npm run admin:hash -- "tu contraseña"
+```
+
+Mercado Pago **dejalo vacío**: sin `MP_ACCESS_TOKEN` la app corre en modo
+simulado y se puede recorrer todo el circuito sin cobrar nada, que es
+exactamente lo que querés para una demo. Además, sin dominio no hay HTTPS, y
+Mercado Pago no acepta `back_urls` ni webhooks en `http://`.
+
+### 3. Publicar
+
+```bash
+bash deploy/update.sh
+```
+
+Instala dependencias, aplica migraciones, buildea y reinicia el servicio. Al
+terminar, la tienda queda en `http://TU_IP`.
+
+Ese mismo comando es el que corrés **cada vez que quieras publicar cambios**:
+pusheás desde tu máquina, entrás por SSH y lo ejecutás.
+
+```bash
+journalctl -u soja -f      # logs en vivo
+systemctl restart soja     # reiniciar sin rebuildear
+```
+
+### Lo que hay que tener en cuenta sin dominio
+
+- `NEXT_PUBLIC_SITE_URL` se hornea en el build. Si la cambiás, hay que volver a
+  correr `update.sh`; reiniciar el servicio no alcanza.
+- El navegador va a mostrar "No es seguro" (es `http://`). Para una demo
+  interna no molesta, pero si el cliente lo va a ver seguido, un dominio
+  barato + `certbot --nginx` lo arregla en cinco minutos.
+- `nginx-soja.conf` sube el `client_max_body_size` a 20 MB. El default de nginx
+  es 1 MB y el diseñador acepta arte de hasta 15 MB: sin eso, subir un archivo
+  grande devuelve 413 antes de llegar a la app.
+
+### Backups
+
+La base y el arte están en la misma máquina, así que un backup es esto:
+
+```bash
+sudo -u postgres pg_dump soja > ~/soja-$(date +%F).sql
+tar czf ~/uploads-$(date +%F).tar.gz -C ~/soja-web/public uploads
+```
+
+Bajalos a tu máquina con `scp` antes de tocar nada importante.
+
+---
+
 ## Deploy en Render
 
 Hay un `render.yaml` listo: en Render, **New → Blueprint**, elegís este repo y
@@ -298,6 +408,7 @@ Lo que hay que cambiar antes de publicar, en orden de importancia:
 
 ```
 render.yaml                      Blueprint de deploy en Render
+deploy/                          Scripts y configs para deployar en un VPS
 .nvmrc                           Versión de Node
 src/
   proxy.ts                       Corta el paso a /admin (antes: middleware.ts)

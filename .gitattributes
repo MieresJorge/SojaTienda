@@ -1,0 +1,3 @@
+# Los archivos de deploy se ejecutan en Linux: si git los checkoutea con CRLF,
+# bash falla con "bad interpreter" y systemd no parsea la unit.
+deploy/* text eol=lf
