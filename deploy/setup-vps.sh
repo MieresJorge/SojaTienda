@@ -24,7 +24,7 @@ fi
 echo "==> Paquetes base"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl ca-certificates git nginx postgresql postgresql-contrib ufw openssl
+apt-get install -y curl ca-certificates git nginx postgresql postgresql-contrib ufw openssl   certbot python3-certbot-nginx
 
 echo "==> Node 22"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v22.* ]]; then
@@ -113,5 +113,8 @@ Falta subir el código y arrancar. Como usuario ${APP_USER}:
 
 DATABASE_URL     -> /home/${APP_USER}/DATABASE_URL.txt
 SITE_URL         -> http://${IP}
+
+Si tenés dominio, apuntale un registro A a ${IP} y después:
+  certbot --nginx -d tudominio.com -d www.tudominio.com
 -------------------------------------------------------------------
 FIN

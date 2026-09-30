@@ -290,6 +290,29 @@ journalctl -u soja -f      # logs en vivo
 systemctl restart soja     # reiniciar sin rebuildear
 ```
 
+### Con dominio: HTTPS
+
+Con un dominio apuntado al VPS (registro `A` a tu IP, tanto `@` como `www`),
+el certificado es un comando. Primero cambiá el `server_name` de nginx:
+
+```bash
+sed -i 's/server_name _;/server_name tudominio.com www.tudominio.com;/'   /etc/nginx/sites-available/soja
+nginx -t && systemctl reload nginx
+```
+
+Y después:
+
+```bash
+certbot --nginx -d tudominio.com -d www.tudominio.com
+```
+
+Certbot edita el `server` de nginx solo, agrega el `listen 443`, redirige el
+`http` al `https` y deja la renovación automática puesta. Verificá con
+`certbot renew --dry-run`.
+
+Acordate de que `NEXT_PUBLIC_SITE_URL` tiene que ser `https://tudominio.com`
+**antes** del build, no después.
+
 ### Lo que hay que tener en cuenta sin dominio
 
 - `NEXT_PUBLIC_SITE_URL` se hornea en el build. Si la cambiás, hay que volver a
