@@ -71,11 +71,14 @@ else
 fi
 
 echo "==> nginx"
+# nginx sirve /uploads/ leyendo de /home/${APP_USER}, que es 750. Sin esto no
+# puede ni entrar al directorio y el arte subido responde 403.
+usermod -aG "${APP_USER}" www-data
 install -m 644 "${HERE}/nginx-soja.conf" /etc/nginx/sites-available/soja
 ln -sf /etc/nginx/sites-available/soja /etc/nginx/sites-enabled/soja
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
-systemctl reload nginx
+systemctl restart nginx
 
 echo "==> Firewall"
 ufw allow OpenSSH

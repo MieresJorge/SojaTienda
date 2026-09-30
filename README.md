@@ -290,6 +290,21 @@ journalctl -u soja -f      # logs en vivo
 systemctl restart soja     # reiniciar sin rebuildear
 ```
 
+### Por qué nginx sirve `/uploads/`
+
+Next arma la lista de archivos de `public/` **cuando arranca el proceso**, no
+en cada request. Con `STORAGE_DRIVER=local` eso rompe el caso de uso central:
+el cliente sube su arte, el archivo queda en disco, y Next lo responde con 404
+hasta el próximo reinicio del servicio.
+
+Por eso `nginx-soja.conf` tiene un `location /uploads/` que lee del filesystem
+directo. Sigue siendo el mismo origen que la app —que es lo que necesita el
+canvas para exportar el mockup sin quedar *tainted*—, pero sin pasar por Next.
+
+Requiere que `www-data` pueda atravesar `/home/soja`, que es 750; por eso
+`setup-vps.sh` corre `usermod -aG soja www-data`. Si el arte responde 403,
+empezá por ahí.
+
 ### Con dominio: HTTPS
 
 Con un dominio apuntado al VPS (registro `A` a tu IP, tanto `@` como `www`),
